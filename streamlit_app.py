@@ -29,7 +29,7 @@ if page == "借用與查詢":
     st.warning("⚠️ 1.請完整填寫姓名、部門、理由。")
     st.warning("⚠️ 2.如有急需請洽SNS PJ致燁或文欣。")
     st.warning("⚠️3.相機使用後請將電池充電並刪除記憶卡中資料再歸還")
-    st.text_input("↖️點擊左上角切換至歸還頁面")
+    st.text("↖️點擊左上角切換至歸還頁面")
     # 借用表單
     with st.form("borrow_form"):
         name = st.text_input("借用人姓名")
