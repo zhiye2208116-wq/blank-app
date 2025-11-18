@@ -19,7 +19,7 @@ df = pd.read_csv(CSV_FILE)
 st.set_page_config(page_title="廣宣攝影設備借用管理系統", layout="wide")
 
 # 側邊欄選單
-page = st.sidebar.radio("選擇功能頁面", ["借用與查詢", "歸還設備", "後台管理"])
+page = st.sidebar.radio("選擇功能頁面", ["借用與查詢", "歸還設備/預約取消", "後台管理"])
 
 # -------------------------
 # 借用與查詢頁面
