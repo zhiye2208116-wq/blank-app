@@ -95,9 +95,9 @@ elif page == "歸還設備/預約取消":
     if st.button("歸還/取消"):
         mask = (df["訂單編號"] == return_order_id) & (df["狀態"] == "借用中")
         if mask.any():
-            df.loc[mask, "狀態"] = "已歸還"
+            df.loc[mask, "狀態"] = "已歸還/取消"
             df.to_csv(CSV_FILE, index=False)
-            st.success("✅ 設備已歸還！")
+            st.success("✅ 設備已歸還/取消！")
         else:
             st.warning("⚠️ 找不到符合條件的借用紀錄或尚未審核通過。")
 
