@@ -41,7 +41,7 @@ if page == "借用與查詢":
     with st.form("borrow_form"):
         name = st.text_input("借用人姓名")
         department = st.text_input("借用人部門")
-        equipment = st.selectbox("設備名稱", ["相機", "鏡頭", "腳架", "燈光"])
+        equipment = st.selectbox("設備名稱", ["CANON相機", "V8", "腳架", "讀卡機"])
         date = st.date_input("借用日期", datetime.today())
         time_slots = st.multiselect("借用時段（可多選）", [f"{h}:00-{h+1}:00" for h in range(9, 18)])
         purpose = st.text_area("借用目的")
