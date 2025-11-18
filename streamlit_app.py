@@ -87,10 +87,10 @@ if page == "借用與查詢":
 # -------------------------
 elif page == "歸還設備/預約取消":
     st.title("🔄 歸還設備或取消預約")
-    return_order_id = st.text_input("輸入訂單編號以歸還/取消，可用下面的功能查詢訂單編號")
     st.warning("⚠️ 1.相機使用後請將電池充電並刪除記憶卡中資料再歸還")
-    st.warning("⚠️ 2.歸還時請先將設備交付給廣宣設備管理負責人，再按下歸還")
-    st.warning("⚠️ 3.取消預約時請可直接按下歸還")
+    st.warning("⚠️ 2.歸還時請先將設備交付給廣宣設備管理負責人，再按下歸還/取消")
+    st.warning("⚠️ 3.取消預約時請可直接按下歸還/取消")
+    return_order_id = st.text_input("輸入訂單編號以歸還/取消，可用下面的功能查詢訂單編號")
     if st.button("歸還/取消"):
         mask = (df["訂單編號"] == return_order_id) & (df["狀態"] == "借用中")
         if mask.any():
