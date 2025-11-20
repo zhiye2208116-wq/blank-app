@@ -17,10 +17,10 @@ if not os.path.exists(CSV_FILE):
 df = pd.read_csv(CSV_FILE)
 
 # Streamlit 頁面設定
-st.set_page_config(page_title="攝影設備借用管理系統", layout="wide")
+st.set_page_config(page_title="廣宣攝影設備借用管理系統", layout="wide")
 
 # 側邊欄選單
-page = st.sidebar.radio("選擇功能頁面", ["借用與查詢", "歸還設備", "後台管理"])
+page = st.sidebar.radio("選擇功能頁面", ["借用與查詢", "歸還設備/取消預約", "後台管理"])
 
 # -------------------------
 # 借用與查詢頁面
@@ -28,11 +28,14 @@ page = st.sidebar.radio("選擇功能頁面", ["借用與查詢", "歸還設備"
 if page == "借用與查詢":
     st.title("📷 借用攝影設備與查詢預約狀態")
 
+    st.text("現有廣宣設備主負責人：🧝‍♂️致燁🧑‍🚀文欣")
     st.markdown("""
     **注意事項：**
-    1. 不固定上來查看申請，如有急需或是借用問題請發信或 TEAMS 給 SNS PJ 擔當 致燁 或 文欣。
-    2. 請完整填寫姓名、部門、借用理由。
-    3. 相機使用後請將電池充電並刪除記憶卡中資料再歸還。
+    1. 借用請請完整填寫姓名、部門、理由。
+    2. 借用申請填寫完送出，會經由負責人審核，審核通過才能借用，未完整填寫會駁回申請。
+    3. 不固定時間上來查看申請，如有急需或是借用問題請發信或 TEAMS 給 SNS PJ 擔當 致燁 / 文欣。
+    4. 同時借用多個設備需分開申請。
+    5. 審核通過後，請提早向廣宣負責人拿取設備。(如為整天借用，請於前一個工作日的17點前找我們)
     """, unsafe_allow_html=True)
 
     # 借用表單（多設備選擇）
@@ -71,6 +74,7 @@ if page == "借用與查詢":
 
     # 查詢預約狀態（新增設備分類）
     st.subheader("📅 選擇日期與設備查看預約狀態")
+    st.warning(" 可查詢：審核是否通過、預約狀態、歸還狀態")
     selected_date = st.date_input("選擇日期", datetime.today())
     selected_equipment = st.selectbox("選擇設備", ["CANON相機", "V8", "腳架", "讀卡機"])
 
@@ -101,9 +105,10 @@ if page == "借用與查詢":
 # -------------------------
 # 歸還設備頁面
 # -------------------------
-elif page == "歸還設備":
+elif page == "歸還設備/取消預約":
     st.title("🔄 歸還設備與取消預約")
-
+    st.warning("⚠️ 1.相機使用後請將電池充電並刪除記憶卡中資料再歸還")
+    st.warning("⚠️ 2.歸還時請先將設備交付給廣宣設備管理負責人，再按下歸還")
     return_order_id = st.text_input("輸入訂單編號以歸還設備")
     if st.button("歸還"):
         mask = (df["訂單編號"] == return_order_id) & (df["狀態"] == "借用中")
@@ -117,6 +122,7 @@ elif page == "歸還設備":
 
     st.subheader("❌ 取消預約")
     cancel_order_id = st.text_input("輸入訂單編號以取消預約")
+    st.warning("⚠️ 取消預約時請輸入訂單編號後，直接按下取消無須告知負責人")
     if st.button("取消預約"):
         mask_cancel = (df["訂單編號"] == cancel_order_id) & (df["狀態"].isin(["待審核", "借用中"]))
         if mask_cancel.any():
@@ -149,6 +155,7 @@ elif page == "後台管理":
         st.success("✅ 登入成功")
 
         st.subheader("待審核的預約")
+        st.warning("⚠️ 同筆訂單多個時段申請的話需狂按同意")
         pending = df[df["狀態"] == "待審核"]
         if pending.empty:
             st.info("目前沒有待審核的預約")
