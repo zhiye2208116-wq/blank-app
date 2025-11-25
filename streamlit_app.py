@@ -1,25 +1,85 @@
 
 import streamlit as st
 import pandas as pd
-import os
 from datetime import datetime
 import uuid
+from io import BytesIO
+import boto3
+from botocore.exceptions import ClientError
 
-# 設定 CSV 檔案名稱
-CSV_FILE = "borrow_records.csv"
-
-# 如果檔案不存在，建立空的 DataFrame 並儲存
-if not os.path.exists(CSV_FILE):
-    df = pd.DataFrame(columns=["訂單編號", "姓名", "部門", "設備", "日期", "時段", "借用目的", "狀態", "申請時間", "處理時間"])
-    df.to_csv(CSV_FILE, index=False)
-
-# 讀取現有借用紀錄
-df = pd.read_csv(CSV_FILE)
-
-# Streamlit 頁面設定
+# -------------------------
+# 基本設定
+# -------------------------
 st.set_page_config(page_title="廣宣攝影設備借用管理系統", layout="wide")
 
+# 必要欄位
+COLUMNS = ["訂單編號", "姓名", "部門", "設備", "日期", "時段", "借用目的", "狀態", "申請時間", "處理時間"]
+
+# -------------------------
+# S3 工具函式
+# -------------------------
+def get_s3():
+    """建立 S3 client 與設定"""
+    aws = st.secrets.get("aws", None)
+    if not aws:
+        st.error("未在 .streamlit/secrets.toml 設定 [aws]，請先設定後再啟動。")
+        st.stop()
+    session = boto3.session.Session(
+        aws_access_key_id=aws["access_key"],
+        aws_secret_access_key=aws["secret_key"],
+        region_name=aws["region"]
+    )
+    client = session.client("s3")
+    bucket = aws["bucket"]
+    key = aws.get("key", "borrow_records.csv")
+    return client, bucket, key
+
+def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """確保 DataFrame 欄位完整且順序正確"""
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    return df[COLUMNS]
+
+@st.cache_data(ttl=30)
+def load_df():
+    """從 S3 載入 CSV，若不存在則建立空表並上傳"""
+    client, bucket, key = get_s3()
+    try:
+        obj = client.get_object(Bucket=bucket, Key=key)
+        body = obj["Body"].read()
+        df = pd.read_csv(BytesIO(body))
+        df = ensure_columns(df)
+        return df
+    except ClientError as e:
+        # 若不存在，建立空檔並上傳
+        if e.response["Error"]["Code"] in ("NoSuchKey", "404", "NoSuchBucket"):
+            empty = pd.DataFrame(columns=COLUMNS)
+            save_df(empty, invalidate_cache=False)  # 先上傳空檔
+            return empty
+        else:
+            st.error(f"S3 讀取錯誤：{e}")
+            st.stop()
+
+def save_df(df: pd.DataFrame, invalidate_cache: bool = True):
+    """把 CSV 寫回 S3"""
+    client, bucket, key = get_s3()
+    buf = BytesIO()
+    df = ensure_columns(df)
+    df.to_csv(buf, index=False)
+    buf.seek(0)
+    client.put_object(Bucket=bucket, Key=key, Body=buf.getvalue(), ContentType="text/csv")
+    if invalidate_cache:
+        load_df.clear()  # 清除快取，確保下次讀取最新
+
+# -------------------------
+# 初始化載入資料
+# -------------------------
+df = load_df()
+
+# -------------------------
 # 側邊欄選單
+# -------------------------
 page = st.sidebar.radio("選擇功能頁面", ["借用與查詢", "歸還設備/取消預約", "後台管理"])
 
 # -------------------------
@@ -38,7 +98,6 @@ if page == "借用與查詢":
     5. 審核通過後，請提早向廣宣負責人拿取設備。(如為整天借用，請於前一個工作日的17點前找我們)
     """, unsafe_allow_html=True)
 
-    # 借用表單（多設備選擇）
     with st.form("borrow_form"):
         name = st.text_input("借用人姓名")
         department = st.text_input("借用人部門")
@@ -49,13 +108,21 @@ if page == "借用與查詢":
         submitted = st.form_submit_button("提交")
 
     if submitted:
-        if not equipments or not time_slots:
+        if not name.strip() or not department.strip() or not purpose.strip():
+            st.error("⚠️ 姓名、部門與借用目的為必填。")
+        elif not equipments or not time_slots:
             st.error("⚠️ 請至少選擇一個設備和一個時段！")
         else:
-            df = pd.read_csv(CSV_FILE)  # 重新讀取最新資料
+            # 讀取最新資料以避免併發衝突
+            df = load_df()
+
             # 檢查衝突
-            conflict_records = df[(df["設備"].isin(equipments)) & (df["日期"] == str(date)) &
-                                  (df["時段"].isin(time_slots)) & (df["狀態"].isin(["待審核", "借用中"]))]
+            conflict_records = df[
+                (df["設備"].isin(equipments)) &
+                (df["日期"] == str(date)) &
+                (df["時段"].isin(time_slots)) &
+                (df["狀態"].isin(["待審核", "借用中"]))
+            ]
             if not conflict_records.empty:
                 st.error("⚠️ 以下設備與時段已被預約：")
                 for _, row in conflict_records.iterrows():
@@ -67,19 +134,26 @@ if page == "借用與查詢":
                 for eq in equipments:
                     for slot in time_slots:
                         new_records.append([order_id, name, department, eq, str(date), slot, purpose, "待審核", apply_time, ""])
-                new_df = pd.DataFrame(new_records, columns=["訂單編號", "姓名", "部門", "設備", "日期", "時段", "借用目的", "狀態", "申請時間", "處理時間"])
+                new_df = pd.DataFrame(new_records, columns=COLUMNS)
+
+                # 合併並保存到 S3
                 df = pd.concat([df, new_df], ignore_index=True)
-                df.to_csv(CSV_FILE, index=False)
+                save_df(df)
                 st.success(f"✅ 預約請求已送出！訂單編號：{order_id}，等待後台審核")
 
-    # 查詢預約狀態（新增設備分類）
+    # 查詢預約狀態
     st.subheader("📅 選擇日期與設備查看預約狀態")
-    st.warning(" 可查詢：審核是否通過、預約狀態、歸還狀態")
+    st.warning("可查詢：審核是否通過、預約狀態、歸還狀態")
     selected_date = st.date_input("選擇日期", datetime.today())
     selected_equipment = st.selectbox("選擇設備", ["CANON相機", "V8", "腳架", "讀卡機"])
 
-    day_records = df[(df["日期"] == str(selected_date)) & (df["設備"] == selected_equipment) &
-                     (df["狀態"].isin(["待審核", "借用中"]))]
+    # 使用最新資料（避免顯示過期狀態）
+    df = load_df()
+    day_records = df[
+        (df["日期"] == str(selected_date)) &
+        (df["設備"] == selected_equipment) &
+        (df["狀態"].isin(["待審核", "借用中"]))
+    ]
 
     st.write(f"{selected_date} 的 {selected_equipment} 預約狀態")
     all_slots = [f"{h}:00-{h+1}:00" for h in range(9, 18)]
@@ -88,12 +162,12 @@ if page == "借用與查詢":
         booked = day_records[day_records["時段"] == slot]
         if not booked.empty:
             dept = booked.iloc[0]["部門"]
-            name = booked.iloc[0]["姓名"]
+            name_ = booked.iloc[0]["姓名"]
             order_id = booked.iloc[0]["訂單編號"]
             status = booked.iloc[0]["狀態"]
             st.markdown(
                 f"<div style='background-color:#006666;color:white;padding:8px;border-radius:5px;margin-bottom:5px;'>"
-                f"{slot}<br>姓名:{name}<br>部門:{dept}<br>ID:{order_id}<br>狀態:{status}</div>",
+                f"{slot}<br>姓名:{name_}<br>部門:{dept}<br>ID:{order_id}<br>狀態:{status}</div>",
                 unsafe_allow_html=True
             )
         else:
@@ -103,19 +177,21 @@ if page == "借用與查詢":
             )
 
 # -------------------------
-# 歸還設備頁面
+# 歸還設備/取消預約
 # -------------------------
 elif page == "歸還設備/取消預約":
     st.title("🔄 歸還設備與取消預約")
     st.warning("⚠️ 1.相機使用後請將電池充電並刪除記憶卡中資料再歸還")
     st.warning("⚠️ 2.歸還時請先將設備交付給廣宣設備管理負責人，再按下歸還")
+
     return_order_id = st.text_input("輸入訂單編號以歸還設備")
     if st.button("歸還"):
+        df = load_df()
         mask = (df["訂單編號"] == return_order_id) & (df["狀態"] == "借用中")
         if mask.any():
             df.loc[mask, "狀態"] = "已歸還"
             df.loc[mask, "處理時間"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            df.to_csv(CSV_FILE, index=False)
+            save_df(df)
             st.success("✅ 設備已歸還！")
         else:
             st.warning("⚠️ 找不到符合條件的借用紀錄或尚未審核通過。")
@@ -124,11 +200,12 @@ elif page == "歸還設備/取消預約":
     cancel_order_id = st.text_input("輸入訂單編號以取消預約")
     st.warning("⚠️ 取消預約時請輸入訂單編號後，直接按下取消無須告知負責人")
     if st.button("取消預約"):
+        df = load_df()
         mask_cancel = (df["訂單編號"] == cancel_order_id) & (df["狀態"].isin(["待審核", "借用中"]))
         if mask_cancel.any():
             df.loc[mask_cancel, "狀態"] = "已取消"
             df.loc[mask_cancel, "處理時間"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            df.to_csv(CSV_FILE, index=False)
+            save_df(df)
             st.success("✅ 預約已取消，該時段已釋出！")
         else:
             st.warning("⚠️ 找不到符合條件的預約紀錄或已處理過。")
@@ -136,9 +213,12 @@ elif page == "歸還設備/取消預約":
     st.subheader("🔍 搜尋借用紀錄")
     search_query = st.text_input("輸入姓名或部門進行搜尋")
     if st.button("搜尋"):
+        df = load_df()
         if search_query.strip():
-            results = df[(df["姓名"].str.contains(search_query, case=False, na=False)) |
-                         (df["部門"].str.contains(search_query, case=False, na=False))]
+            results = df[
+                (df["姓名"].str.contains(search_query, case=False, na=False)) |
+                (df["部門"].str.contains(search_query, case=False, na=False))
+            ]
             if not results.empty:
                 st.write("搜尋結果：")
                 st.dataframe(results)
@@ -156,43 +236,66 @@ elif page == "後台管理":
 
         st.subheader("待審核的預約")
         st.warning("⚠️ 同筆訂單多個時段申請的話需狂按同意")
+        df = load_df()
         pending = df[df["狀態"] == "待審核"]
         if pending.empty:
             st.info("目前沒有待審核的預約")
         else:
-            for idx, row in pending.iterrows():
+            for _, row in pending.iterrows():
                 st.markdown(
                     f"訂單編號: {row['訂單編號']} | 姓名: {row['姓名']} | 部門: {row['部門']} | 設備: {row['設備']} | 日期: {row['日期']} | 時段: {row['時段']} | 目的: {row['借用目的']} | 申請時間: {row.get('申請時間', '無資料')}"
                 )
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button(f"同意 {row['訂單編號']}", key=f"approve_{row['訂單編號']}"):
-                        df.loc[idx, "狀態"] = "借用中"
-                        df.loc[idx, "處理時間"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        df.to_csv(CSV_FILE, index=False)
-                        st.success(f"✅ 訂單 {row['訂單編號']} 已審核通過")
+                    if st.button(f"同意 {row['訂單編號']}", key=f"approve_{row['訂單編號']}_{row['設備']}_{row['時段']}"):
+                        df_latest = load_df()
+                        mask = (
+                            (df_latest["訂單編號"] == row["訂單編號"]) &
+                            (df_latest["設備"] == row["設備"]) &
+                            (df_latest["日期"] == row["日期"]) &
+                            (df_latest["時段"] == row["時段"]) &
+                            (df_latest["狀態"] == "待審核")
+                        )
+                        if mask.any():
+                            df_latest.loc[mask, "狀態"] = "借用中"
+                            df_latest.loc[mask, "處理時間"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            save_df(df_latest)
+                            st.success(f"✅ 訂單 {row['訂單編號']} 已審核通過")
+                        else:
+                            st.info("該筆紀錄已被處理或狀態改變，請重新整理。")
                 with col2:
-                    if st.button(f"駁回 {row['訂單編號']}", key=f"reject_{row['訂單編號']}"):
-                        df.loc[idx, "狀態"] = "已駁回"
-                        df.loc[idx, "處理時間"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        df.to_csv(CSV_FILE, index=False)
-                        st.warning(f"❌ 訂單 {row['訂單編號']} 已被駁回")
+                    if st.button(f"駁回 {row['訂單編號']}", key=f"reject_{row['訂單編號']}_{row['設備']}_{row['時段']}"):
+                        df_latest = load_df()
+                        mask = (
+                            (df_latest["訂單編號"] == row["訂單編號"]) &
+                            (df_latest["設備"] == row["設備"]) &
+                            (df_latest["日期"] == row["日期"]) &
+                            (df_latest["時段"] == row["時段"]) &
+                            (df_latest["狀態"] == "待審核")
+                        )
+                        if mask.any():
+                            df_latest.loc[mask, "狀態"] = "已駁回"
+                            df_latest.loc[mask, "處理時間"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            save_df(df_latest)
+                            st.warning(f"❌ 訂單 {row['訂單編號']} 已被駁回")
+                        else:
+                            st.info("該筆紀錄已被處理或狀態改變，請重新整理。")
 
         # 查看所有紀錄 + 匯出 CSV
         st.subheader("📜 查看所有歷史訂單紀錄")
         if st.button("顯示所有紀錄"):
-            st.dataframe(df)
+            st.dataframe(load_df())
 
         st.download_button(
             label="⬇ 匯出所有紀錄 CSV",
-            data=df.to_csv(index=False),
+            data=load_df().to_csv(index=False),
             file_name="all_borrow_records.csv",
             mime="text/csv"
         )
 
-        # 顯示設備借用統計圖表
+        # 統計圖表
         st.subheader("📊 設備借用次數統計")
-        stats = df["設備"].value_counts()
+        stats = load_df()["設備"].value_counts()
         st.bar_chart(stats)
 
     elif password:
